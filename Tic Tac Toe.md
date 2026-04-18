@@ -109,9 +109,6 @@ const SCORE_RANGE = SCORE_MAX - SCORE_MIN;
     return ln ? board[ln[0]] : null;
   };
 
-
-
-
   // Applies a move with the vanishing-oldest-piece mechanic.
   // Returns a new immutable state object.
   const applyMove = (state, player, move) => {
@@ -119,29 +116,17 @@ const SCORE_RANGE = SCORE_MAX - SCORE_MIN;
     const queues = { X: [...state.queues.X], O: [...state.queues.O] };
     let removed  = null;
 
-
-
-
     if (queues[player].length === 3) {
       removed = queues[player].shift();
       board[removed] = null;
     }
 
-
-
-
     board[move] = player;
     queues[player].push(move);
-
-
-
 
     const winLine = getWinLine(board);
     return { board, queues, removed, winner: winLine ? board[winLine[0]] : null, winLine: winLine || [] };
   };
-
-
-
 
   // Queue-aware legal moves: treats oldest cell as vacant when queue is full.
   const legalMoves = (state, player) => {
@@ -150,14 +135,17 @@ const SCORE_RANGE = SCORE_MAX - SCORE_MIN;
     return board.map((v,i) => v ? null : i).filter(i => i !== null);
   };
 
-
-
-
   /* ═══════════════════════════════════════════════════════════
      EVALUATION — X-biased heuristic (X = AI coach)
   ═══════════════════════════════════════════════════════════ */
   const evaluate = (state) => {
-    const { board } = state;
+    const board = [...state.board];
+const qX = state.queues.X;
+const qO = state.queues.O;
+
+// simulate next-move vanish
+if (qX.length === 3) board[qX[0]] = null;
+if (qO.length === 3) board[qO[0]] = null;
     let score = 0;
     for (const [a,b,c] of WIN_LINES) {
       const line = [board[a], board[b], board[c]];
@@ -179,19 +167,17 @@ const SCORE_RANGE = SCORE_MAX - SCORE_MIN;
       if (board[c] === O) score -= 2;
     }
     // Queue expiry pressure: reward positions where O's oldest piece is about to vanish
-    if (state.queues[O].length === 3) {
-      const dying = state.queues[O][0];
+    if (qO.length === 3){
+      const dying = qO[0];
       const linesWithDying = WIN_LINES.filter(ln => ln.includes(dying));
       for (const [a,b,c] of linesWithDying) {
-        const on = [board[a],board[b],board[c]].filter(v => v === O).length;
+        const on = [state.board[a], state.board[b], state.board[c]]
+  .filter(v => v === O).length;
         if (on >= 2) score += 4; // O is about to lose an anchor piece
       }
     }
     return score;
   };
-
-
-
 
   /* ═══════════════════════════════════════════════════════════
      TRANSPOSITION TABLE (module-level — persists across turns)
@@ -424,34 +410,24 @@ const baseScore = minimax(next, 'O', 0, depth, -Infinity, Infinity, new Set());
 
 
 
-function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScore) {
-  if (!personality) {
+function decideAdaptiveMove(state, difficulty, exploitMode, personalityLabel, rtpScore) {
+  if (!personalityLabel){
   return pickSafeMove(state, difficulty);
 }
   // EASY → always try to attack
-  if (personality && personality.includes('EASY')) {
+  if (personalityLabel && personalityLabel.includes('EASY')) {
     return pickAggressiveMove(state);
   }
 
-
-
-
   // MEDIUM → attack only if exploit window
-  if (personality && personality.includes('MEDIUM')) {
+  if (personalityLabel && personalityLabel.includes('MEDIUM')) {
   if (exploitMode) return pickAggressiveMove(state);
-
-
   if (rtpScore > 0.18) return pickAggressiveMove(state);
-
-
   return pickSafeMove(state, difficulty);
 }
 
-
-
-
   // HARD → only attack on confirmed mistake
-  if (personality && personality.includes('HARD')) {
+  if (personalityLabel && personalityLabel.includes('HARD')) {
   if (exploitMode) return pickAggressiveMove(state);
 
 
@@ -467,15 +443,9 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScor
   return pickBestX(state, 'Hard');
 }
 
-
-
-
   // UNKNOWN → fallback
   return exploitMode ? pickAggressiveMove(state) : pickBestX(state, difficulty);
 }
-
-
-
 
   function detectSubOptimalMove(prevState, currentState) {
   // Find what move O actually made
@@ -491,26 +461,13 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScor
     }
   }
 
-
-
-
   if (actualMove === null) return false;
-
-
-
-
   // Get all possible legal O moves before it played
   const possibleMoves = legalMoves(prevState, 'O');
-
-
-
 
   // Find "good" moves (moves that don’t lead to immediate loss)
   const safeMoves = possibleMoves.filter(mv => {
     const next = applyMove(prevState, 'O', mv);
-
-
-
 
     // If X can win immediately after this move, it's bad
     const xMoves = legalMoves(next, 'X');
@@ -518,30 +475,16 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScor
       const afterX = applyMove(next, 'X', xm);
       if (afterX.winner === 'X') return false;
     }
-
-
-
-
     return true;
   });
-
-
-
 
   // If actual move is NOT in safe moves → it's a mistake
   return !safeMoves.includes(actualMove);
 }
-
-
-
-
   /* ═══════════════════════════════════════════════════════════
      ANALYSIS SUITE — run after every O move so UI can annotate
   ═══════════════════════════════════════════════════════════ */
-
-
-
-
+  // const { board } = state;
   // Returns all O cells whose vanishing on O's NEXT turn breaks an O threat
   function findDangerousOPieces(state) {
     if (state.queues[O].length < 3) return [];
@@ -556,9 +499,6 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScor
     return [...new Set(atRisk)];
   }
 
-
-
-
   // Find X cells that, if played, create a fork (two simultaneous winning threats)
   function findForkMoves(state) {
     return legalMoves(state, X).filter(mv => {
@@ -568,7 +508,7 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScor
       for (const [a,b,c] of WIN_LINES) {
         const line = [after.board[a], after.board[b], after.board[c]];
         const xn   = line.filter(v => v === X).length;
-        const en   = line.filter(v => v === null).length;
+        const en = line.filter(v => !v).length;
         if (xn === 2 && en === 1) threats++;
       }
       return threats >= 2;
@@ -582,13 +522,12 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScor
 
   // Score every cell from X's perspective for the heatmap (0–1 normalised)
   function computeHeatmap(state, difficulty) {
-    const depth = DEPTH[difficulty];
-    const d = DEPTH[difficulty] ?? DEPTH.Hard;
+    const depth = DEPTH[difficulty] ?? DEPTH.Hard;
     const moves = legalMoves(state, X);
     if (!moves.length) return Array(9).fill(0);
     const scored = moves.map(mv => {
       const next  = applyMove(state, X, mv);
-      const score = next.winner === X ? 120 : minimax(next, O, 0, d, -Infinity, Infinity, new Set());
+      const score = next.winner === X ? 120 : minimax(next, O, 0, depth, -Infinity, Infinity, new Set());
       return { mv, score };
     });
     const min = Math.min(...scored.map(s => s.score));
@@ -619,33 +558,8 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personality, rtpScor
     return danger;
   }
 
-
-  function evaluateRiskyState(state) {
-  // Count how many immediate winning moves O would have
-  const oWinningMoves = legalMoves(state, 'O').filter(mv => {
-    return applyMove(state, 'O', mv).winner === 'O';
-  });
-
-
-  // If O has 2+ threats → very dangerous (fork-like)
-  if (oWinningMoves.length >= 2) return -50;
-
-
-  // If O has 1 threat → risky
-  if (oWinningMoves.length === 1) return -20;
-
-
-  return 0;
-}
-
-
-
-
   function evaluateOMoveRisk(state, move) {
   const next = applyMove(state, 'O', move);
-
-
-
 
   // 1. Immediate X win after this move → VERY BAD
   const xMoves = legalMoves(next, 'X');
@@ -960,9 +874,8 @@ const [replayResult, setReplayResult] = useState(null);
 
   window.addEventListener('keydown', handleKey);
   return () => window.removeEventListener('keydown', handleKey);
-}, [board, phase, winner, thinking]);
+}, [board, phase, winner, thinking, handleCellClick]);
     const hasLoadedRef = useRef(false);
-
 
     useEffect(() => {
   if (!hasLoadedRef.current) return;
@@ -1114,7 +1027,7 @@ const nextWindow = isMistake
       state,
       difficulty,
       exploitWindow > 0,
-      personality?.label || null,
+      (detected || personality)?.label || null)
       rtp
     );
 
@@ -1156,20 +1069,13 @@ const nextWindow = isMistake
       if (winner || thinking || phase !== 'game') return;
 
 
-
-
       // Validate: cell must be in legal O moves
       const legal = new Set(legalMoves({ board, queues }, O));
       if (!legal.has(idx)) return;
 
 
-
-
       // Save previous state BEFORE O move
       const snapshot = { board: [...board], queues: { X: [...queues.X], O: [...queues.O] } };
-
-
-
 
       // 1. Apply O move
       const afterO = applyMove({ board, queues }, O, idx);
@@ -1188,9 +1094,6 @@ if (isMistake) {
 
 // Update state AFTER computing nextWindow
 setExploitWindow(nextWindow);
-
-
-
 
       setBoard(afterO.board);
       setQueues(afterO.queues);
@@ -1309,10 +1212,8 @@ setWinningPatterns(prev => [
         }
         setThinking(false);
       }, 380);
-    }, [board, queues, winner, thinking, phase, difficulty, oHistory]);
-
-
-
+    }, [board, queues, winner, thinking, phase, difficulty, oHistory, exploitWindow,
+  personality, rtpConfig]);
 
     // ── start / reset ─────────────────────────────────────────
     const startGame = () => {
@@ -1579,10 +1480,9 @@ const copyGameLog = () => {
                   <button
                     key={idx}
                     onClick={() => handleCellClick(idx)}
+                    onMouseEnter={() => setHoverIdx(idx)}
 onMouseLeave={() => {
   setHoverIdx(null);
-
-
 }}
                     className={cellStyle(idx)}
                     title={SQ[idx]}
@@ -1925,5 +1825,3 @@ onMouseLeave={() => {
   </script>
 </body>
 </html>
-
-
