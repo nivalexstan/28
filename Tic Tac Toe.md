@@ -43,54 +43,31 @@
 </head>
 <body class="min-h-screen bg-deep text-cyan-100 font-mono">
   <div id="root"></div>
-
-
-
-
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-
-
-
   <script type="text/babel">
   /* ═══════════════════════════════════════════════════════════
      CONSTANTS
   ═══════════════════════════════════════════════════════════ */
   const { useState, useEffect, useRef, useCallback } = React;
-
   const O = 'O'; // YOU — casino first-mover you are learning to beat
   const X = 'X'; // AI coach — optimal counter-system
-
-
   const DEPTH = {
-  Easy: 3,
-  Medium: 5,
-  Hard: 7
+  Easy: 4,
+  Medium: 6,
+  Hard: 8
 };
-
-
   const WIN_LINES = [
     [0,1,2],[3,4,5],[6,7,8],
     [0,3,6],[1,4,7],[2,5,8],
     [0,4,8],[2,4,6],
   ];
-
-
   const SCORE_MIN = -120;
 const SCORE_MAX = 120;
 const SCORE_RANGE = SCORE_MAX - SCORE_MIN;
-
-
-
-
   // Square labels: row-major A1..C3
   const SQ = ['A1','A2','A3','B1','B2','B3','C1','C2','C3'];
-
-
-
-
   /* ═══════════════════════════════════════════════════════════
      PURE GAME ENGINE
   ═══════════════════════════════════════════════════════════ */
@@ -100,41 +77,55 @@ const SCORE_RANGE = SCORE_MAX - SCORE_MIN;
         return [a,b,c];
     return null;
   };
-
-
-
-
   const checkWinner = (board) => {
     const ln = getWinLine(board);
     return ln ? board[ln[0]] : null;
   };
-
   // Applies a move with the vanishing-oldest-piece mechanic.
   // Returns a new immutable state object.
   const applyMove = (state, player, move) => {
     const board  = [...state.board];
-    const queues = { X: [...state.queues.X], O: [...state.queues.O] };
+    const queues = { X: [...state.queues.X], O: [...state.queues.O]};
+    const moves = [...(state.moves || [])];
     let removed  = null;
-
     if (queues[player].length === 3) {
-      removed = queues[player].shift();
-      board[removed] = null;
-    }
+  // find oldest move of this player from global move history
+  const oldest = moves.find(m => m.player === player);
 
+  if (oldest) {
+    removed = oldest.pos;
+
+    // remove from queue
+    const qIdx = queues[player].indexOf(removed);
+if (qIdx !== -1) queues[player].splice(qIdx, 1);
+
+    // remove from global moves
+    const idx = moves.findIndex(m => m.player === player && m.pos === removed);
+    if (idx !== -1) moves.splice(idx, 1);
+
+    board[removed] = null;
+  }
+}
     board[move] = player;
     queues[player].push(move);
-
+    moves.push({ player, pos: move });
     const winLine = getWinLine(board);
-    return { board, queues, removed, winner: winLine ? board[winLine[0]] : null, winLine: winLine || [] };
+    return { board, queues, moves, removed, winner: winLine ? board[winLine[0]] : null, winLine: winLine || [] };
   };
-
   // Queue-aware legal moves: treats oldest cell as vacant when queue is full.
   const legalMoves = (state, player) => {
     const board = [...state.board];
-    if (state.queues[player].length === 3) board[state.queues[player][0]] = null;
+    if (state.queues[player].length === 3) {
+  const oldest = (state.moves || []).find(m => m.player === player);
+
+  if (oldest) {
+    board[oldest.pos] = null;
+  } else {
+    board[state.queues[player][0]] = null; // fallback safety
+  }
+}
     return board.map((v,i) => v ? null : i).filter(i => i !== null);
   };
-
   /* ═══════════════════════════════════════════════════════════
      EVALUATION — X-biased heuristic (X = AI coach)
   ═══════════════════════════════════════════════════════════ */
@@ -142,7 +133,6 @@ const SCORE_RANGE = SCORE_MAX - SCORE_MIN;
     const board = [...state.board];
 const qX = state.queues.X;
 const qO = state.queues.O;
-
 // simulate next-move vanish
 if (qX.length === 3) board[qX[0]] = null;
 if (qO.length === 3) board[qO[0]] = null;
@@ -178,68 +168,37 @@ if (qO.length === 3) board[qO[0]] = null;
     }
     return score;
   };
-
   /* ═══════════════════════════════════════════════════════════
      TRANSPOSITION TABLE (module-level — persists across turns)
   ═══════════════════════════════════════════════════════════ */
   const TTABLE = new Map();
   const TTABLE_LIMIT = 8000;
-
-
-
-
   const boardKey = (state, current) => {
     return state.board.map(v => v ?? '-').join('') + '|' +
            state.queues.X.join(',') + '|' + state.queues.O.join(',') + '|' + current;
   };
-
-
-
-
   /* ═══════════════════════════════════════════════════════════
      MINIMAX — X is maximiser, O is minimiser.
      pathStates prevents infinite loops from the vanishing mechanic.
   ═══════════════════════════════════════════════════════════ */
   function minimax(state, current, depth, maxDepth, alpha, beta, pathStates) {
-    // Terminal checks
-    if (state.winner === X) return 120 - depth;
-    if (state.winner === O) return depth - 120;
+    // Terminal checks (winner may be omitted when state is a shallow {board, queues})
+    const terminal = state.winner != null ? state.winner : checkWinner(state.board);
+    if (terminal === X) return 1000 - depth;
+    if (terminal === O) return depth - 1000;
     if (depth >= maxDepth) return evaluate(state);
-
-
-
-
     const cycleKey = boardKey(state, current) + '|' + depth;
     if (pathStates.has(cycleKey)) return 0;
-
-
-
-
     const ttKey = boardKey(state, current) + '|' + depth + '|' + maxDepth;
     if (TTABLE.has(ttKey)) return TTABLE.get(ttKey);
-
-
-
-
     const moves = legalMoves(state, current);
+
     if (!moves.length) return 0;
-
-
-
-
     pathStates.add(cycleKey);
     let best = current === X ? -Infinity : Infinity;
-
-
-
-
     for (const mv of moves) {
       const next  = applyMove(state, current, mv);
       const score = minimax(next, current === X ? O : X, depth + 1, maxDepth, alpha, beta, pathStates);
-
-
-
-
       if (current === X) {
         if (score > best) best = score;
         if (best > alpha)  alpha = best;
@@ -249,39 +208,58 @@ if (qO.length === 3) board[qO[0]] = null;
       }
       if (beta <= alpha) break; // prune
     }
-
-
-
-
     pathStates.delete(cycleKey);
-
-
-
-
     TTABLE.set(ttKey, best);
     if (TTABLE.size > TTABLE_LIMIT) TTABLE.delete(TTABLE.keys().next().value);
-
-
-
-
     return best;
   }
-
-
-
-
   /* ═══════════════════════════════════════════════════════════
      PICK BEST MOVE FOR X (coach / counter-system)
      difficulty: 'Easy'=depth 3, 'Medium'=depth 5, 'Hard'=depth 7
   ═══════════════════════════════════════════════════════════ */
+  function findImmediateOThreats(state) {
+  const threats = [];
+  const moves = legalMoves(state, O);
+
+  for (const mv of moves) {
+    const next = applyMove(state, O, mv);
+    if (next.winner === O) {
+      threats.push(mv);
+    }
+  }
+
+  return threats;
+}
+
+function findForkMovesFor(state, player) {
+  const forks = [];
+  const moves = legalMoves(state, player);
+
+  for (const mv of moves) {
+    const next = applyMove(state, player, mv);
+
+    let winningLines = 0;
+    const nextMoves = legalMoves(next, player);
+
+    for (const nm of nextMoves) {
+      const after = applyMove(next, player, nm);
+      if (after.winner === player) {
+        winningLines++;
+      }
+    }
+
+    if (winningLines >= 2) {
+      forks.push(mv);
+    }
+  }
+
+  return forks;
+}
+
   function pickBestX(state, difficulty) {
     const maxDepth = DEPTH[difficulty] ?? DEPTH.Hard;
-
-
   const moves = legalMoves(state, X);
   if (!moves.length) return null;
-
-
   // 1) Immediate win — always take it
   for (const mv of moves) {
     const next = applyMove(state, X, mv);
@@ -290,6 +268,27 @@ if (qO.length === 3) board[qO[0]] = null;
     }
   }
 
+  // 2) Block O immediate win (critical)
+const oThreats = findImmediateOThreats(state);
+if (oThreats.length > 0) {
+  return { move: oThreats[0], score: 900, type: 'block' };
+}
+
+// 3) Block O fork (double threat)
+const oForkThreat = findForkMovesFor(state, O);
+if (oForkThreat.length > 0) {
+  const disruptors = legalMoves(state, X).filter(mv => !oForkThreat.includes(mv));
+
+  const center = disruptors.find(m => m === 4);
+  if (center !== undefined) {
+    return { move: center, score: 800, type: 'fork-block' };
+  }
+
+  const corner = disruptors.find(m => [0,2,6,8].includes(m));
+  if (corner !== undefined) {
+    return { move: corner, score: 780, type: 'fork-block' };
+  }
+}
 
   // 2) Single sweep: score all moves ONCE
   const scored = moves.map(mv => {
@@ -297,32 +296,16 @@ if (qO.length === 3) board[qO[0]] = null;
     const score = minimax(next, O, 0, maxDepth, -Infinity, Infinity, new Set());
     return { mv, sc: score };
   });
-
-
   // Sort descending by score
   scored.sort((a, b) => b.sc - a.sc);
-
-
   // 3) Easy mode: occasionally pick 2nd-best (no extra minimax)
-  if (difficulty === 'Easy' && scored.length > 1 && Math.random() < 0.35) {
-    return { move: scored[1].mv, score: scored[1].sc, isSubOptimal: true };
-  }
-
-
+  
   // 4) Default: best move
   return { move: scored[0].mv, score: scored[0].sc };
 }
-
-
-
-
-  function pickAggressiveMove(state) {
+  function pickAggressiveMove(state, difficulty) {
   const moves = legalMoves(state, 'X');
   if (!moves.length) return null;
-
-
-
-
   // 1. Immediate win
   for (const mv of moves) {
     const next = applyMove(state, 'X', mv);
@@ -330,156 +313,108 @@ if (qO.length === 3) board[qO[0]] = null;
       return { move: mv, score: 120, type: 'win' };
     }
   }
-
-
-
-
   // 2. Create fork (best exploit)
   const forks = findForkMoves(state);
   if (forks.length) {
     return { move: forks[0], score: 90, type: 'fork' };
   }
-
-
-
-
   // 3. Force pressure (create 2-in-row)
   for (const mv of moves) {
     const next = applyMove(state, 'X', mv);
-
-
-
-
     for (const [a,b,c] of WIN_LINES) {
       const line = [next.board[a], next.board[b], next.board[c]];
       const xCount = line.filter(v => v === 'X').length;
       const empty = line.filter(v => v === null).length;
-
-
-
-
       if (xCount === 2 && empty === 1) {
         return { move: mv, score: 70, type: 'pressure' };
       }
     }
   }
-
-
-
-
   // 4. fallback to normal
-  return pickBestX(state, 'Hard');
+  return pickBestX(state, 'difficulty');
 }
 
+function evaluateRiskyState(state) {
+  const w = legalMoves(state, 'O').filter(mv =>
+    applyMove(state, 'O', mv).winner === 'O'
+  );
+
+  if (w.length >= 2) return -50;   // multiple threats → very bad
+  if (w.length === 1) return -20;  // single threat → bad
+  return 0;                        // safe
+}
 
 function pickSafeMove(state, difficulty) {
   const moves = legalMoves(state, 'X');
   if (!moves.length) return null;
-
-
   let best = null;
   let bestScore = -Infinity;
-
-
   for (const mv of moves) {
     const next = applyMove(state, 'X', mv);
-
-
     // If move immediately wins → always take it
     if (next.winner === 'X') {
       return { move: mv, score: 120, type: 'win' };
     }
-
-
     const depth = DEPTH[difficulty] ?? DEPTH.Hard;
 const baseScore = minimax(next, 'O', 0, depth, -Infinity, Infinity, new Set());
     const riskPenalty = evaluateRiskyState(next);
     const finalScore = baseScore + riskPenalty;
-
-
     if (finalScore > bestScore) {
       bestScore = finalScore;
       best = mv;
     }
   }
-
-
-  return { move: best, score: bestScore, type: 'safe' };
+  if (best === null && moves.length > 0) {
+  best = moves[0];
 }
-
-
-
-
+return { move: best, score: bestScore, type: 'safe' };
+}
 function decideAdaptiveMove(state, difficulty, exploitMode, personalityLabel, rtpScore) {
   if (!personalityLabel){
   return pickSafeMove(state, difficulty);
 }
   // EASY → always try to attack
   if (personalityLabel && personalityLabel.includes('EASY')) {
-    return pickAggressiveMove(state);
+    return pickAggressiveMove(state, difficulty);
   }
-
   // MEDIUM → attack only if exploit window
   if (personalityLabel && personalityLabel.includes('MEDIUM')) {
-  if (exploitMode) return pickAggressiveMove(state);
-  if (rtpScore > 0.18) return pickAggressiveMove(state);
+  if (exploitMode) return pickAggressiveMove(state, difficulty);
+  if (rtpScore > 0.18) return pickAggressiveMove(state, difficulty);
   return pickSafeMove(state, difficulty);
 }
-
   // HARD → only attack on confirmed mistake
   if (personalityLabel && personalityLabel.includes('HARD')) {
-  if (exploitMode) return pickAggressiveMove(state);
-
-
+  if (exploitMode) return pickAggressiveMove(state, difficulty);
   // If no immediate O threat → prioritize safety
   const threats = findImmediateOThreats(state);
-
-
   if (threats.length === 0) {
     return pickSafeMove(state, difficulty);
   }
-
-
   return pickBestX(state, 'Hard');
 }
-
   // UNKNOWN → fallback
-  return exploitMode ? pickAggressiveMove(state) : pickBestX(state, difficulty);
+  return exploitMode ? pickAggressiveMove(state, difficulty) : pickBestX(state, difficulty);
 }
-
-  function detectSubOptimalMove(prevState, currentState) {
-  // Find what move O actually made
+  const O_MOVE_QUALITY_MARGIN = 20;
+  function oMoveIsSuboptimalFromRank(ranked, actualMove) {
+    if (!ranked.length) return false;
+    const bestSc = ranked[0].sc;
+    const actual = ranked.find(r => r.mv === actualMove);
+    if (!actual) return true;
+    if (bestSc >= 999 && actual.sc < 999) return true;
+    return actual.sc < bestSc - O_MOVE_QUALITY_MARGIN;
+  }
+  function detectSubOptimalMove(prevState, currentState, difficulty = 'Hard') {
   let actualMove = null;
-
-
-
-
   for (let i = 0; i < 9; i++) {
     if (prevState.board[i] !== currentState.board[i] && currentState.board[i] === 'O') {
       actualMove = i;
       break;
     }
   }
-
   if (actualMove === null) return false;
-  // Get all possible legal O moves before it played
-  const possibleMoves = legalMoves(prevState, 'O');
-
-  // Find "good" moves (moves that don’t lead to immediate loss)
-  const safeMoves = possibleMoves.filter(mv => {
-    const next = applyMove(prevState, 'O', mv);
-
-    // If X can win immediately after this move, it's bad
-    const xMoves = legalMoves(next, 'X');
-    for (const xm of xMoves) {
-      const afterX = applyMove(next, 'X', xm);
-      if (afterX.winner === 'X') return false;
-    }
-    return true;
-  });
-
-  // If actual move is NOT in safe moves → it's a mistake
-  return !safeMoves.includes(actualMove);
+  return oMoveIsSuboptimalFromRank(rankOMoves(prevState, difficulty), actualMove);
 }
   /* ═══════════════════════════════════════════════════════════
      ANALYSIS SUITE — run after every O move so UI can annotate
@@ -498,28 +433,55 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personalityLabel, rt
     }
     return [...new Set(atRisk)];
   }
-
-  // Find X cells that, if played, create a fork (two simultaneous winning threats)
-  function findForkMoves(state) {
-    return legalMoves(state, X).filter(mv => {
-      const after = applyMove(state, X, mv);
-      if (after.winner === X) return false; // already a win, not a fork
+  // Cells where `player` moving creates two or more two-in-a-row threats (fork)
+  function findForkMovesFor(state, player) {
+    return legalMoves(state, player).filter(mv => {
+      const after = applyMove(state, player, mv);
+      if (after.winner === player) return false;
       let threats = 0;
       for (const [a,b,c] of WIN_LINES) {
         const line = [after.board[a], after.board[b], after.board[c]];
-        const xn   = line.filter(v => v === X).length;
+        const pn = line.filter(v => v === player).length;
         const en = line.filter(v => !v).length;
-        if (xn === 2 && en === 1) threats++;
+        if (pn === 2 && en === 1) threats++;
       }
       return threats >= 2;
     });
   }
-
+  function findForkMoves(state) {
+    return findForkMovesFor(state, X);
+  }
+  // Squares O should consider to stop X from completing a line next turn
+  function findMustBlockX(state) {
+    const blocks = [];
+    for (const [a, b, c] of WIN_LINES) {
+      const vals = [state.board[a], state.board[b], state.board[c]];
+      const xn = vals.filter(v => v === X).length;
+      const on = vals.filter(v => v === O).length;
+      if (xn !== 2 || on !== 0) continue;
+      for (const i of [a, b, c]) {
+        if (!state.board[i] && legalMoves(state, O).includes(i)) blocks.push(i);
+      }
+    }
+    return [...new Set(blocks)];
+  }
+  // Rank all legal O moves from O's perspective (higher = better for O)
+  function rankOMoves(state, difficulty) {
+    const maxDepth = DEPTH[difficulty] ?? DEPTH.Hard;
+    const moves = legalMoves(state, O);
+    const scored = moves.map(mv => {
+      const next = applyMove(state, O, mv);
+      if (next.winner === O) return { mv, sc: 1000 };
+      const xScore = minimax(next, X, 0, maxDepth, -Infinity, Infinity, new Set());
+      return { mv, sc: -xScore };
+    });
+    scored.sort((a, b) => b.sc - a.sc);
+    return scored;
+  }
   // Squares where O playing next turn would win — X must block these
   function findImmediateOThreats(state) {
     return legalMoves(state, O).filter(mv => applyMove(state, O, mv).winner === O);
   }
-
   // Score every cell from X's perspective for the heatmap (0–1 normalised)
   function computeHeatmap(state, difficulty) {
     const depth = DEPTH[difficulty] ?? DEPTH.Hard;
@@ -537,7 +499,6 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personalityLabel, rt
       heat[mv] = max === min ? 0.5 : (score - min) / (max - min);
     return heat;
   }
-
   // Compute a "threat score" for each empty O cell (how dangerous is that square for O)
   function computeOThreatMap(state) {
     const danger = Array(9).fill(0);
@@ -557,10 +518,8 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personalityLabel, rt
     }
     return danger;
   }
-
   function evaluateOMoveRisk(state, move) {
   const next = applyMove(state, 'O', move);
-
   // 1. Immediate X win after this move → VERY BAD
   const xMoves = legalMoves(next, 'X');
   for (const xm of xMoves) {
@@ -569,26 +528,14 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personalityLabel, rt
       return 'BLUNDER';
     }
   }
-
-
-
-
   // 2. Check if X can create fork after this
   const forks = findForkMoves(next);
   if (forks.length) {
     return 'TRAP';
   }
-
-
-
-
   // 3. Otherwise safe
   return 'SAFE';
 }
-
-
-
-
   /* ═══════════════════════════════════════════════════════════
      PATTERN RECOGNISER — label O's opening patterns
   ═══════════════════════════════════════════════════════════ */
@@ -609,98 +556,56 @@ function decideAdaptiveMove(state, difficulty, exploitMode, personalityLabel, rt
     if ([1,3,5,7].includes(f)) return 'Edge opener — X corners + center dominate.';
     return null;
   }
-
-
-
-
   function detectPersonality(oHistory, board) {
   if (oHistory.length < 2) return null;
-
-
   const [first, second, third] = oHistory;
-
-
   // Default confidence
   let confidence = 0.5;
-
-
   // --- HARD patterns ---
   if (first === 4) {
     return { label: 'HARD (Center control)', confidence: 0.6 };
   }
-
-
   if ([0,2,6,8].includes(first) && second === 4) {
     return { label: 'HARD (Corner → Center)', confidence: 0.7 };
   }
-
-
   // --- 3rd move recovery (higher confidence) ---
   if (oHistory.length >= 3) {
     if ([1,3,5,7].includes(first) && third === 4) {
       return { label: 'HARD (Recovered to center)', confidence: 0.9 };
     }
   }
-
-
   // --- MEDIUM ---
   if ([1,3,5,7].includes(second)) {
     return { label: 'MEDIUM (Defensive / reactive)', confidence: 0.6 };
   }
-
-
   // --- EASY ---
   if (![0,2,4,6,8].includes(second)) {
     return { label: 'EASY (Random / weak)', confidence: 0.5 };
   }
-
-
   return { label: 'UNKNOWN', confidence: 0.4 };
 }
-
-
-
-
 function estimateRTPProbability(oHistory, personality, exploitWindow, config) {
   let base = config.base;
-
-
   if (!personality) return base;
-
-
   if (personality.includes('EASY')) base = config.easy;
   else if (personality.includes('MEDIUM')) base = config.medium;
   else if (personality.includes('HARD')) base = config.hard;
-
-
   // Exploit window boost (decaying)
   if (exploitWindow > 0) {
     base += config.windowBoost * exploitWindow;
   }
-
-
   // Early randomness boost
   if (oHistory.length <= 2) {
     base += config.earlyBoost;
   }
-
-
   return Math.min(base, 0.6);
 }
-
-
-
-
   /* ═══════════════════════════════════════════════════════════
      INSIGHT ENGINE — plain-language coaching per turn
   ═══════════════════════════════════════════════════════════ */
   function generateInsight(state, xMove, oMove, analysis) {
     const { forks, threats, dangerO } = analysis;
     const lines = [];
-
-
-
-
     if (threats.length > 0)
       lines.push(`🔴 O threatened to win at ${threats.map(i=>SQ[i]).join('/')} — X blocked.`);
     if (forks.length > 0)
@@ -709,71 +614,41 @@ function estimateRTPProbability(oHistory, personality, exploitWindow, config) {
       lines.push(`⏳ O's oldest piece at ${dangerO.map(i=>SQ[i]).join('/')} vanishes next O turn — exploit this window.`);
     if (xMove?.isForcedWin)
       lines.push(`✅ X found a forced win sequence.`);
-
-
-
-
       const baseText = lines.length
   ? lines.join(' ')
   : `X placed at ${SQ[xMove?.move ?? 0]} — continuing counter-structure.`;
-
-
-
-
 // Confidence estimation
 let confidence = 'Balanced position';
 if (xMove?.score >= 100) confidence = 'High win probability';
 else if (xMove?.score >= 40) confidence = 'Favorable position';
 else if (xMove?.score >= 0) confidence = 'Likely draw';
 else confidence = 'Risky position';
-
-
-
-
 // If exploit mode triggered
 if (xMove?.type === 'fork' || xMove?.type === 'win') {
   confidence = 'Exploit window — high chance to win';
 }
-
-
-
-
 // Convert minimax score → win probability
 let winProb = null;
 if (typeof xMove?.score === 'number') {
   winProb = Math.max(0, Math.min(1, (xMove.score - SCORE_MIN) / SCORE_RANGE));
 }
-
-
 const probText = winProb !== null
   ? ` | 📈 Win probability: ${(winProb * 100).toFixed(0)}%`
   : '';
-
-
 return baseText + ` | 📊 ${confidence}` + probText;
   }
-
-
-
-
 // ✅ ADD HERE
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
     this.state = { hasError: false };
   }
-
-
   static getDerivedStateFromError() {
     return { hasError: true };
   }
-
-
   componentDidCatch(error, info) {
     console.error('App crashed:', error, info);
   }
-
-
   render() {
     if (this.state.hasError) {
       return (
@@ -785,15 +660,6 @@ class ErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
-
-
-// then your App() function starts BELOW
-function App() {
-  ...
-}
-
-
-
 
   /* ═══════════════════════════════════════════════════════════
      APP COMPONENT
@@ -809,10 +675,6 @@ function App() {
     const [phase,      setPhase]      = useState('setup'); // 'setup' | 'game'
     const [difficulty, setDifficulty] = useState('Hard');
     const [thinking,   setThinking]   = useState(false);
-
-
-
-
     // Coach signals
     const [heatmap,    setHeatmap]    = useState(Array(9).fill(0));
     const [oThreat,    setOThreat]    = useState(Array(9).fill(0));
@@ -832,10 +694,6 @@ function App() {
   windowBoost: 0.08,
   earlyBoost: 0.05
 });
-
-
-
-
     // History & stats
     const [oHistory,   setOHistory]   = useState([]);
     const [sessionHistory, setSessionHistory] = useState([]);
@@ -847,46 +705,30 @@ function App() {
     const [hoverIdx,   setHoverIdx]   = useState(null);
     const [replayInput, setReplayInput] = useState('');
 const [replayResult, setReplayResult] = useState(null);
+    const [oCoach, setOCoach] = useState(null);
    
-
-
-
-
     const logRef = useRef(null);
     useEffect(() => {
   const handleKey = (e) => {
     if (phase !== 'game' || winner || thinking) return;
-
-
     const key = parseInt(e.key);
     if (key >= 1 && key <= 9) {
       const idx = key - 1;
-
-
       // Prevent invalid move
       if (board[idx]) return;
-
-
       handleCellClick(idx);
     }
   };
-
-
   window.addEventListener('keydown', handleKey);
   return () => window.removeEventListener('keydown', handleKey);
 }, [board, phase, winner, thinking, handleCellClick]);
     const hasLoadedRef = useRef(false);
-
     useEffect(() => {
   if (!hasLoadedRef.current) return;
-
-
   if (sessionHistory.length > 0) {
     localStorage.setItem('ttt_session_history', JSON.stringify(sessionHistory));
   }
 }, [sessionHistory]);
-
-
 useEffect(() => {
   const saved = localStorage.getItem('ttt_session_history');
   if (saved) {
@@ -894,24 +736,12 @@ useEffect(() => {
   }
   hasLoadedRef.current = true;
 }, []);
-
-
-
-
     // ── derived display values ────────────────────────────────
     const oldestO = queues.O.length === 3 ? queues.O[0] : null;
     const oldestX = queues.X.length === 3 ? queues.X[0] : null;
-
-
-
-
     // When hovering an empty cell, show if that O move would lose its oldest
     const hoverVanishPreview = hoverIdx !== null && !board[hoverIdx] && queues.O.length === 3
       ? queues.O[0] : null;
-
-
-
-
     // ── analysis effect — runs whenever board changes ─────────
     useEffect(() => {
       if (phase !== 'game' || winner) {
@@ -929,85 +759,60 @@ useEffect(() => {
       setBlockMoves(findImmediateOThreats(st));
       setDyingO(findDangerousOPieces(st));
     }, [board, queues, phase, winner, difficulty]);
-
-
-
-
+    useEffect(() => {
+      if (phase !== 'game' || winner || thinking) {
+        setOCoach(null);
+        return;
+      }
+      const st = { board, queues };
+      setOCoach({
+        top: rankOMoves(st, difficulty).slice(0, 3),
+        blockX: findMustBlockX(st),
+        oForks: findForkMovesFor(st, O),
+        oWins: findImmediateOThreats(st),
+      });
+    }, [board, queues, phase, winner, difficulty, thinking]);
     // Scroll log
     useEffect(() => {
       if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
     }, [log]);
-
-
-
-
     // ── helpers ──────────────────────────────────────────────
     const pushLog = (entry) => setLog(prev => [...prev.slice(-60), entry]);
-
-
-
-
     const runAnalysis = (st) => ({
       forks:   findForkMoves(st),
       threats: findImmediateOThreats(st),
       dangerO: findDangerousOPieces(st),
     });
-
-
     function runReplaySimulation(sequence, difficulty, rtpConfig) {
   let state = { board: Array(9).fill(null), queues: { X: [], O: [] } };
-
-
   let oHistory = [];
   let exploitWindow = 0;
   let personality = null;
-
-
   const transcript = [];
-
-
   for (let i = 0; i < sequence.length; i++) {
     const oMove = sequence[i];
-
-
     // Snapshot before move
     const snapshot = {
       board: [...state.board],
       queues: { X: [...state.queues.X], O: [...state.queues.O] }
     };
-
-
     // Apply O move
     const afterO = applyMove(state, 'O', oMove);
     state = { board: afterO.board, queues: afterO.queues };
-
-
     transcript.push({ player: 'O', sq: SQ[oMove] });
-
-
     // Detect mistake → update window
-    const isMistake = detectSubOptimalMove(snapshot, afterO);
-
-
+    const isMistake = detectSubOptimalMove(snapshot, afterO, difficulty);
 // lock current value
 const currentWindow = exploitWindow;
-
-
 const nextWindow = isMistake
   ? 2
   : Math.max(0, currentWindow - 1);
     exploitWindow = nextWindow;
-
-
     // Update history
     oHistory = [...oHistory, oMove];
-
-
     // Detect personality
     const detected = detectPersonality(oHistory, afterO.board);
     if (detected) personality = detected;
-
-
     // RTP
     const rtp = estimateRTPProbability(
       oHistory,
@@ -1015,101 +820,65 @@ const nextWindow = isMistake
       exploitWindow,
       rtpConfig
     );
-
-
     if (afterO.winner === 'O') {
       return { result: 'O_WIN', step: i + 1, transcript };
     }
-
-
     // X move (REAL logic)
     const xMv = decideAdaptiveMove(
-      state,
-      difficulty,
-      exploitWindow > 0,
-      (detected || personality)?.label || null)
-      rtp
-    );
-
-
+  state,
+  difficulty,
+  exploitWindow > 0,
+  (detected || personality)?.label || null,
+  rtp
+);
     if (!xMv) return { result: 'DRAW', transcript };
-
-
     const afterX = applyMove(state, 'X', xMv.move);
     state = { board: afterX.board, queues: afterX.queues };
-
-
     let winProb = null;
     if (typeof xMv.score === 'number') {
       winProb = Math.max(0, Math.min(1, (xMv.score - SCORE_MIN) / SCORE_RANGE));
     }
-
-
     transcript.push({
       player: 'X',
       sq: SQ[xMv.move],
       winProb: winProb ? `${(winProb * 100).toFixed(0)}%` : null
     });
-
-
     if (afterX.winner === 'X') {
       return { result: 'X_WIN', step: i + 1, transcript };
     }
   }
-
-
   return { result: 'INCOMPLETE', transcript };
 }
-
-
-
-
     // ── main click handler: YOU place O, AI responds with X ──
     const handleCellClick = useCallback((idx) => {
       if (winner || thinking || phase !== 'game') return;
-
-
       // Validate: cell must be in legal O moves
       const legal = new Set(legalMoves({ board, queues }, O));
       if (!legal.has(idx)) return;
-
-
       // Save previous state BEFORE O move
       const snapshot = { board: [...board], queues: { X: [...queues.X], O: [...queues.O] } };
-
+      const oRankBefore = rankOMoves(snapshot, difficulty);
       // 1. Apply O move
       const afterO = applyMove({ board, queues }, O, idx);
-      // Detect if casino made a mistake
-      const isMistake = detectSubOptimalMove(snapshot, afterO);
-
-
+      const isMistake = oMoveIsSuboptimalFromRank(oRankBefore, idx);
 // Compute next window locally (IMPORTANT)
 const nextWindow = isMistake ? 2 : Math.max(0, exploitWindow - 1);
-
-
 if (isMistake) {
-  pushLog('⚠ RTP window detected: Casino made sub-optimal move');
+  pushLog('⚠ O move trailed engine best — exploit window extended (adaptive X)');
 }
-
-
 // Update state AFTER computing nextWindow
 setExploitWindow(nextWindow);
-
       setBoard(afterO.board);
       setQueues(afterO.queues);
       const newOHist = [...oHistory, idx];
       setOHistory(newOHist);
       setPattern(recognisePattern(newOHist));
-
-
 const detected = detectPersonality(newOHist, afterO.board);
 if (  detected && (!personality || detected.label !== personality.label || detected.confidence !== personality.confidence)
 ) {
    setPersonality(detected);
   pushLog(`🧠 Profile updated: ${detected.label} (${Math.round(detected.confidence * 100)}%)`);
 }
-
-
 const newRtp = estimateRTPProbability(
   newOHist,
   (detected || personality)?.label || null,
@@ -1117,7 +886,16 @@ const newRtp = estimateRTPProbability(
   rtpConfig
 );
 setRtpScore(newRtp);
-pushLog(`→ O placed at ${SQ[idx]}${afterO.removed !== null ? ` (removed ${SQ[afterO.removed]})` : ''}`);
+      const topPick = oRankBefore[0];
+      const mineRank = oRankBefore.find(r => r.mv === idx);
+      let oQuality = '';
+      if (topPick && topPick.mv === idx) oQuality = ' | ✓ Engine rank #1';
+      else if (topPick && mineRank)
+        oQuality =
+          topPick.sc - mineRank.sc > O_MOVE_QUALITY_MARGIN
+            ? ` | ⚠ −${(topPick.sc - mineRank.sc).toFixed(0)} vs best ${SQ[topPick.mv]}`
+            : ' | ≈ Near engine best';
+pushLog(`→ O placed at ${SQ[idx]}${afterO.removed !== null ? ` (removed ${SQ[afterO.removed]})` : ''}${oQuality}`);
       setMoveHistory(prev => [...prev, { player: 'O', pos: idx }]);
       if (afterO.winner === O) {
         setWinner(O);
@@ -1127,38 +905,19 @@ pushLog(`→ O placed at ${SQ[idx]}${afterO.removed !== null ? ` (removed ${SQ[a
         pushLog('✗ O wins this round. Study what allowed this — use "Reset" to try again.');
         return;
       }
-
-
-
-
       // 2. X responds
       setThinking(true);
       setTimeout(() => {
         const st  = { board: afterO.board, queues: afterO.queues };
         const ana = runAnalysis(st);
-        const xMv = decideAdaptiveMove(
-  st,
-  difficulty,
-  nextWindow > 0,
-  personality?.label || null,
-  newRtp
-);
-
-
-
-
-        if (!xMv) { setThinking(false); return; }
-
-
-
-
+        const xMv = decideAdaptiveMove(  st,  difficulty,  nextWindow > 0,  (detected || personality)?.label || null,  newRtp);
+        if (!xMv || xMv.move === null || xMv.move === undefined) {
+  setThinking(false);
+  return;
+}
         const afterX = applyMove(st, X, xMv.move);
         setBoard(afterX.board);
         setQueues(afterX.queues);
-
-
-
-
         const ins = generateInsight(st, xMv, idx, ana);
         setInsight(ins);
         let winProb = null;
@@ -1171,8 +930,6 @@ pushLog(
   (winProb !== null ? ` | WinProb ${(winProb * 100).toFixed(0)}%` : '') +
   ` | ${ins}`
 );
-
-
         // Build readable sequence
         if (afterX.winner === X) {
           setWinner(X);
@@ -1180,20 +937,12 @@ pushLog(
           setStats(p => ({...p, games: p.games+1, xWins: p.xWins+1}));
           setSessionHistory(prev => [...prev, [...moveHistory, { player: 'X', pos: xMv.move }]]);
           pushLog('✓ X wins! This counter-pattern works. Note the sequence.');
-
-
 // Build winning sequence ONLY here
 const finalHistory = [...moveHistory, { player: 'X', pos: xMv.move }];
-
-
 const winSequence = finalHistory
   .map(m => `${m.player}→${SQ[m.pos]}`)
   .join(', ');
-
-
   const winPatternLabel = pattern || 'Unknown pattern';
-
-
 // Save only real winning sequences
 setWinningPatterns(prev => [
   { sequence: winSequence, pattern: winPatternLabel },
@@ -1214,7 +963,6 @@ setWinningPatterns(prev => [
       }, 380);
     }, [board, queues, winner, thinking, phase, difficulty, oHistory, exploitWindow,
   personality, rtpConfig]);
-
     // ── start / reset ─────────────────────────────────────────
     const startGame = () => {
       if (TTABLE.size > 5000) TTABLE.clear();
@@ -1233,40 +981,24 @@ setWinningPatterns(prev => [
       setRtpScore(0);
       pushLog('── New round started. You play O. AI coaches X. ──');
     };
-
-
     const handleReplay = () => {
   if (!replayInput.trim()) return;
-
-
   const sequence = replayInput
     .split(',')
     .map(s => parseInt(s.trim()))
     .filter(n => !isNaN(n) && n >= 0 && n <= 8);
-
-
   if (!sequence.length) return;
-
-
   const result = runReplaySimulation(sequence, difficulty, rtpConfig);
   setReplayResult(result);
 };
-
-
 const copyGameLog = () => {
   if (!sessionHistory.length) return;
-
-
   const text = sessionHistory
     .map((game, i) => `Game ${i + 1}: ${game.map(m => `${m.player}:${SQ[m.pos]}`).join(',')}`)
     .join('\n');
-
-
   navigator.clipboard.writeText(text);
   pushLog('📋 Game log copied to clipboard');
 };
-
-
     const resetToSetup = () => {
       setPhase('setup');
       setBoard(Array(9).fill(null));
@@ -1278,8 +1010,6 @@ const copyGameLog = () => {
       setPattern(null);
       setThinking(false);
     };
-
-
         // ── cell appearance calculator ────────────────────────────
     const cellStyle = (idx) => {
       const cell    = board[idx];
@@ -1295,25 +1025,13 @@ const copyGameLog = () => {
       const othr    = oThreat[idx];
       const isLegal = phase === 'game' && !winner && !thinking &&
                       legalMoves({ board, queues }, O).includes(idx);
-
-
-
-
       let extra = 'board-cell cell-glow ';
       if (isWin)   extra += 'ring-win ';
       else if (isBlock) extra += 'ring-warn ';
       else if (isFork)  extra += 'ring-trap ';
       else if (isVPrev) extra += 'ring-vanish ';
       else if (isOOld || isXOld) extra += 'ring-oold ';
-
-
-
-
       const cursor = isLegal ? 'cursor-pointer hover:brightness-125' : 'cursor-not-allowed opacity-60';
-
-
-
-
       // Background: heat tint for empty cells when showHints
       let bg = 'bg-deep';
       if (!cell && showHints && phase === 'game') {
@@ -1326,29 +1044,13 @@ const copyGameLog = () => {
       if (cell === X) bg = 'bg-cyan-900/40';
       if (cell === O) bg = 'bg-fuchsia-900/40';
       if (isWin)      bg = 'bg-green-900/40';
-
-
-
-
       return `${extra}${bg} ${cursor} h-20 w-20 rounded-lg text-3xl font-black flex items-center justify-center relative transition-all duration-150`;
     };
-
-
-
-
     /* ── RENDER ──────────────────────────────────────────────── */
     const xWR = stats.games ? ((stats.xWins/stats.games)*100).toFixed(0) : '--';
     const oWR = stats.games ? ((stats.oWins/stats.games)*100).toFixed(0) : '--';
-
-
-
-
     return (
       <div className="min-h-screen bg-gradient-to-br from-deep via-[#050e20] to-deep flex flex-col items-center justify-start py-8 px-4">
-
-
-
-
         {/* ── Header ────────────────────────────────────────── */}
         <div className="mb-6 text-center">
           <h1 className="text-3xl font-black text-neon tracking-widest mb-1">
@@ -1362,10 +1064,6 @@ const copyGameLog = () => {
             AI coaches <span className="text-neon font-bold">X</span> (optimal response)
           </p>
         </div>
-
-
-
-
         {/* ── Setup screen ──────────────────────────────────── */}
         {phase === 'setup' && (
           <div className="bg-panel border border-cyan-700/40 rounded-2xl p-8 w-full max-w-md text-center space-y-6 animate-[fadeIn_.3s_ease-out]">
@@ -1408,23 +1106,11 @@ const copyGameLog = () => {
             )}
           </div>
         )}
-
-
-
-
         {/* ── Game screen ───────────────────────────────────── */}
         {phase === 'game' && (
           <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
-
-
-
-
             {/* LEFT: board + controls */}
             <div className="flex flex-col items-center gap-4">
-
-
-
-
               {/* Status bar */}
               <div className="w-full bg-panel border border-cyan-700/30 rounded-xl px-4 py-2 flex flex-wrap gap-3 justify-between items-center text-xs">
                 <span className="text-cyan-500">Difficulty: <span className="text-neon font-bold">{difficulty}</span></span>
@@ -1446,34 +1132,20 @@ const copyGameLog = () => {
                   O queue: {queues.O.length}/3 · X queue: {queues.X.length}/3
                 </span>
               </div>
-
-
               <p className="text-[10px] text-cyan-600">
-  Tip: Use keys 1–9 for faster input
+                Tip: Keys 1–9 map to cells 0–8 (key 1 = A1)
 </p>
-
-
-
-
               {/* Pattern recognition */}
               {pattern && (
                 <div className="w-full bg-[#0a1a10] border border-green-700/40 rounded-lg px-4 py-2 text-xs text-green-300">
                   📐 Pattern: {pattern}
                 </div>
               )}
-
-
-
-
               {personality && (
   <div className="w-full bg-[#1a0a0a] border border-red-700/40 rounded-lg px-4 py-2 text-xs text-red-300">
     🧠 Casino Profile: {personality.label} — {Math.round(personality.confidence * 100)}% confidence
   </div>
 )}
-
-
-
-
               {/* BOARD */}
               <div className="grid grid-cols-3 gap-2">
                 {board.map((cell, idx) => (
@@ -1492,17 +1164,12 @@ onMouseLeave={() => {
                     <span className={cell === X ? 'text-neon' : cell === O ? 'text-fuchsia-300' : 'text-cyan-800'}>
                       {cell || '·'}
                     </span>
-
-
-
-
                     {/* Oldest badge */}
                     {(idx === oldestO || idx === oldestX) && (
                       <span className={`absolute top-0.5 right-1 text-[9px] font-bold ${idx===oldestO?'text-fuchsia-400':'text-cyan-400'}`}>
                         {idx === oldestO ? 'O↓' : 'X↓'}
                       </span>
                     )}
-
                     {/* Heat value for empty cells (coach overlay) */}
                     {!cell && showHints && phase === 'game' && !winner && (
                       <span className="absolute bottom-0.5 left-1 text-[8px] text-cyan-700">
@@ -1519,10 +1186,6 @@ onMouseLeave={() => {
                   </button>
                 ))}
               </div>
-
-
-
-
               {/* Legend */}
               {showHints && (
                 <div className="w-full bg-panel border border-cyan-800/30 rounded-lg px-4 py-2">
@@ -1537,17 +1200,9 @@ onMouseLeave={() => {
                   </div>
                 </div>
               )}
-
-
-
-
               {/* Controls */}
-
-
               <div className="bg-panel border border-cyan-700/30 rounded-lg px-3 py-2 text-[10px] space-y-1">
   <p className="text-cyan-400 font-bold">RTP Tuning</p>
-
-
   <div className="flex gap-2">
     <label>Easy</label>
     <input
@@ -1561,8 +1216,6 @@ onMouseLeave={() => {
       }
     />
   </div>
-
-
   <div className="flex gap-2">
     <label>Medium</label>
     <input
@@ -1577,16 +1230,12 @@ onMouseLeave={() => {
     />
   </div>
 </div>
-
-
               <button
   onClick={copyGameLog}
   className="px-4 py-1.5 rounded-lg border border-green-500 text-green-300 text-xs font-bold hover:bg-green-900/30 transition"
 >
   Copy Game Log
 </button>
-
-
               <div className="flex flex-wrap gap-2 justify-center">
                 <button onClick={() => setShowHints(h => !h)}
                   className={`px-4 py-1.5 rounded-lg border text-xs font-bold transition ${showHints ? 'border-neon text-neon' : 'border-cyan-700 text-cyan-500'}`}>
@@ -1601,39 +1250,29 @@ onMouseLeave={() => {
                   ← Setup
                 </button>
               </div>
-
-
               <div className="w-full bg-panel border border-cyan-700/30 rounded-lg px-4 py-3 mt-2 space-y-2">
   <p className="text-xs text-cyan-500 font-bold uppercase tracking-wide">
     Mirror Test (Replay)
   </p>
-
-
   <input
     type="text"
     value={replayInput}
     onChange={(e) => setReplayInput(e.target.value)}
-    placeholder="Enter O moves e.g. 4,0,8"
+    placeholder="Enter cell indices 0–8 (e.g. 4,0,8 = center, top-left, bottom-right)"
     className="w-full bg-deep border border-cyan-700 rounded px-2 py-1 text-xs text-cyan-200"
   />
-
-
   <button
     onClick={handleReplay}
     className="w-full py-1.5 rounded bg-neon text-deep text-xs font-bold"
   >
     Run Simulation
   </button>
-
-
   {replayResult && (
   <div className="text-xs text-cyan-300 space-y-1">
     <p>
       Result: {replayResult.result}
       {replayResult.step && ` at step ${replayResult.step}`}
     </p>
-
-
     {replayResult.transcript && (
       <div className="bg-deep border border-cyan-800/30 rounded p-2 max-h-32 overflow-y-auto">
         {replayResult.transcript.map((step, i) => (
@@ -1647,10 +1286,6 @@ onMouseLeave={() => {
   </div>
 )}
 </div>
-
-
-
-
               {/* Queue tracker */}
               <div className="w-full bg-panel border border-cyan-800/30 rounded-lg px-4 py-2 text-xs">
                 <p className="text-cyan-500 font-bold uppercase tracking-wide mb-1">Queue State Tracker</p>
@@ -1666,16 +1301,8 @@ onMouseLeave={() => {
                 </p>
               </div>
             </div>
-
-
-
-
             {/* RIGHT: coaching panel */}
             <div className="flex flex-col gap-4">
-
-
-
-
               {/* Current coaching insight */}
               <div className="bg-[#040e14] border border-neon/30 rounded-xl p-4">
                 <p className="text-xs text-neon uppercase tracking-widest font-bold mb-2">Coach Analysis</p>
@@ -1683,17 +1310,9 @@ onMouseLeave={() => {
                   {insight || 'Waiting for your first O move…'}
                 </p>
               </div>
-
-
-
-
               {/* Current signal summary */}
               <div className="bg-panel border border-cyan-700/30 rounded-xl p-4 space-y-2 text-xs">
                 <p className="text-cyan-500 uppercase tracking-widest font-bold">Live Signals</p>
-
-
-
-
                 <div className={`flex items-start gap-2 ${blockMoves.length ? 'text-red-300' : 'text-cyan-700'}`}>
                   <span className="mt-0.5">🔴</span>
                   <span>
@@ -1701,10 +1320,6 @@ onMouseLeave={() => {
                     {blockMoves.length ? blockMoves.map(i=>SQ[i]).join(', ') + ' — X must block' : 'None'}
                   </span>
                 </div>
-
-
-
-
                 <div className={`flex items-start gap-2 ${forkMoves.length ? 'text-orange-300' : 'text-cyan-700'}`}>
                   <span className="mt-0.5">⚡</span>
                   <span>
@@ -1712,10 +1327,39 @@ onMouseLeave={() => {
                     {forkMoves.length ? forkMoves.map(i=>SQ[i]).join(', ') : 'None yet'}
                   </span>
                 </div>
-
-
-
-
+                <div className={`flex items-start gap-2 ${oCoach?.oWins?.length ? 'text-fuchsia-300' : 'text-cyan-700'}`}>
+                  <span className="mt-0.5">✦</span>
+                  <span>
+                    <strong>Your instant win (O):</strong>&nbsp;
+                    {oCoach?.oWins?.length ? oCoach.oWins.map(i => SQ[i]).join(', ') : '—'}
+                  </span>
+                </div>
+                <div className={`flex items-start gap-2 ${oCoach?.blockX?.length ? 'text-amber-300' : 'text-cyan-700'}`}>
+                  <span className="mt-0.5">🛡</span>
+                  <span>
+                    <strong>Block X (two-in-a-row):</strong>&nbsp;
+                    {oCoach?.blockX?.length ? oCoach.blockX.map(i => SQ[i]).join(', ') : 'None'}
+                  </span>
+                </div>
+                <div className={`flex items-start gap-2 ${oCoach?.oForks?.length ? 'text-lime-300' : 'text-cyan-700'}`}>
+                  <span className="mt-0.5">⑂</span>
+                  <span>
+                    <strong>O fork setups:</strong>&nbsp;
+                    {oCoach?.oForks?.length ? oCoach.oForks.map(i => SQ[i]).join(', ') : 'None'}
+                  </span>
+                </div>
+                <div className="flex items-start gap-2 text-cyan-500">
+                  <span className="mt-0.5">🎯</span>
+                  <span>
+                    <strong>Engine rank (your side, O):</strong>&nbsp;
+                    {oCoach?.top?.length
+                      ? oCoach.top.map(t => `${SQ[t.mv]} (${t.sc >= 999 ? 'WIN' : t.sc.toFixed(0)})`).join(' · ')
+                      : '—'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-cyan-700 leading-snug">
+                  Analysis matches the casino only when this board and queues mirror the live game (same move order).
+                </p>
                 <div className={`flex items-start gap-2 ${dyingO.length ? 'text-yellow-300' : 'text-cyan-700'}`}>
                   <span className="mt-0.5">⏳</span>
                   <span>
@@ -1723,10 +1367,6 @@ onMouseLeave={() => {
                     {dyingO.length ? `O loses anchor at ${dyingO.map(i=>SQ[i]).join(',')} next O turn` : 'Not yet'}
                   </span>
                 </div>
-
-
-
-
                 <div className="flex items-start gap-2 text-cyan-600">
                   <span className="mt-0.5">📊</span>
                   <span>
@@ -1740,16 +1380,13 @@ onMouseLeave={() => {
                   </span>
                 </div>
               </div>
-
-
-
-
               {/* Move log */}
               <div className="bg-panel border border-cyan-700/30 rounded-xl p-4 flex flex-col flex-1">
                 <p className="text-xs text-cyan-500 uppercase tracking-widest font-bold mb-2">Move Log</p>
-                <div className="text-cyan-400 text-xs">
-  🎲 Mistake Probability: {(rtpScore * 100).toFixed(0)}%
-</div>
+                <div className="text-cyan-400 text-xs leading-snug">
+                  <span className="text-cyan-500">RTP / personality model (not your last-move score):</span>{' '}
+                  {(rtpScore * 100).toFixed(0)}%
+                </div>
                 <div ref={logRef}
                   className="flex-1 overflow-y-auto max-h-48 space-y-1 text-xs text-cyan-400 pr-1">
                   {log.map((l, i) => (
@@ -1763,19 +1400,13 @@ onMouseLeave={() => {
                   {!log.length && <p className="text-cyan-800">No moves yet.</p>}
                 </div>
               </div>
-
-
               <div className="bg-panel border border-green-700/30 rounded-xl p-4 text-xs">
   <p className="text-green-400 uppercase tracking-widest font-bold mb-2">
     Winning Patterns (X)
   </p>
-
-
   {!winningPatterns.length && (
     <p className="text-cyan-700">No wins recorded yet.</p>
   )}
-
-
   {winningPatterns.map((wp, i) => (
     <div key={i} className="mb-2 border-b border-cyan-800/30 pb-1">
       <p className="text-green-300">{wp.sequence}</p>
@@ -1783,8 +1414,6 @@ onMouseLeave={() => {
     </div>
   ))}
 </div>
-
-
               {/* Session stats */}
               <div className="bg-panel border border-cyan-700/30 rounded-xl p-4 text-xs">
                 <p className="text-cyan-500 uppercase tracking-widest font-bold mb-2">Session Stats</p>
@@ -1810,7 +1439,6 @@ onMouseLeave={() => {
                   When X win rate drops below 60% on Hard, O's pattern has structure X can't easily crack — note and study that O sequence.
                 </p>
               </div>
-
             </div>
           </div>
         )}
